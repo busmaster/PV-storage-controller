@@ -1,0 +1,18 @@
+# RS485 Control Mode
+mbpoll pv-speicher -1 -0 -r 42000 -c1
+mbpoll pv-speicher -1 -0 -r 42000 21930 # On
+mbpoll pv-speicher -1 -0 -r 42000 21947 # Off
+
+# Force Mode
+mbpoll pv-speicher -1 -0 -r 42010 -c1
+mbpoll pv-speicher -1 -0 -r 42010 0 # None
+mbpoll pv-speicher -1 -0 -r 42010 1 # Charge
+mbpoll pv-speicher -1 -0 -r 42010 2 # Discharge
+
+# Set Forcible Charge Power
+mbpoll pv-speicher -1 -0 -r 42020 -c1
+mbpoll pv-speicher -1 -0 -r 42020 ... # 0..2500W in 1W steps
+
+# Set Forcible Discharge Power
+mbpoll pv-speicher -1 -0 -r 42021 ... # 0..2500W in 1W steps
+

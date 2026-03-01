@@ -1,0 +1,14 @@
+[Unit]
+Description=PV Storage charge controller
+Wants=network.target
+After=network.target modbus-proxy-pv.service
+Conflicts=pv-charge.service
+ 
+[Service]
+Type=simple
+ExecStart=/home/klaus/pv-storage/pv-control
+StandardOutput=null
+KillSignal=SIGINT
+ 
+[Install]
+WantedBy=multi-user.target
