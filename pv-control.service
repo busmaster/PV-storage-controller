@@ -1,7 +1,7 @@
 [Unit]
 Description=PV Storage charge controller
-Wants=network.target
-After=network.target modbus-proxy-pv.service
+Wants=network.target modbus-proxy-pv.service mosquitto.service
+After=network.target modbus-proxy-pv.service mosquitto.service
 Conflicts=pv-charge.service
  
 [Service]

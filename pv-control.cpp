@@ -8,6 +8,7 @@
 #include <modbus/modbus.h>
 #include <mosquitto.h>
 #include <cjson/cJSON.h>
+#include <sys/socket.h>
 
 static int grid_power;
 volatile sig_atomic_t keep_running = 1;
@@ -50,6 +51,7 @@ int main(int argc, char *argv[]) {
     struct timeval   tv;
     int ret;
     int storage_power = 0;
+    int limit;
     int delay = 0;
     bool charge_only = false;
     uint16_t force_mode;
@@ -57,6 +59,7 @@ int main(int argc, char *argv[]) {
     uint16_t force_discharge_power;
     bool modbus_connected = false;
     int16_t ac_power;
+    uint16_t soc;
 
     if ((argc == 2) && (strcmp(argv[1], "charge") == 0)) {
         charge_only = true;
@@ -71,29 +74,18 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    // 2. Verbindung herstellen
-    if (modbus_connect(ctx) == -1) {
-        fprintf(stderr, "Verbindung fehlgeschlagen: %s\n", modbus_strerror(errno));
-        modbus_free(ctx);
-        return -1;
-    }
-    modbus_connected = true;
-
     mosquitto_lib_init();
     mosq = mosquitto_new("storage-client", true, NULL);
     mosquitto_message_callback_set(mosq, on_message);
     mosquitto_connect_callback_set(mosq, on_connect);
     mosquitto_disconnect_callback_set(mosq, on_disconnect);
 
-    if(mosquitto_connect(mosq, "127.0.0.1", 1883, 60) != MOSQ_ERR_SUCCESS) {
-        return -1;
+    while (mosquitto_connect(mosq, "127.0.0.1", 1883, 60) != MOSQ_ERR_SUCCESS) {
+        sleep(30);
     }
     mosq_fd = mosquitto_socket(mosq);
     mosquitto_subscribe(mosq, NULL, "home/smartmeter/actual", 0);
     mosq_connected = true;
-
-    modbus_write_register(ctx, 42000, 0x55aa); // enable RS485 control mode
-    modbus_write_register(ctx, 42010, 0); // set force mode 'None'
 
     FD_ZERO(&rfds);
     while (keep_running) {
@@ -113,6 +105,8 @@ int main(int argc, char *argv[]) {
                 if ((modbus_write_register(ctx, 42000, 0x55aa) == 1) && // enable RS485 control mode
                     (modbus_write_register(ctx, 42010, 0) == 1)) { // set force mode 'None'
                     modbus_connected = true;
+                    char ch;
+                    while (recv(mosq_fd, &ch, sizeof(ch), MSG_DONTWAIT) > 0);
                 }
             }
         }
@@ -135,11 +129,9 @@ int main(int argc, char *argv[]) {
 
         if (new_meter) {
 #if 0
-            int16_t r1;
-            uint16_t r2;
-            modbus_read_registers(ctx, 30006, 1, (uint16_t *)&r1);
-            modbus_read_registers(ctx, 37005, 1, &r2);
-            printf("        grid %dW, AC power %dW, energy %d%%\n", grid_power, r1, r2);
+            modbus_read_registers(ctx, 37005, 1, &soc);
+            modbus_read_registers(ctx, 30006, 1, (uint16_t *)&ac_power);
+            printf("        grid %dW, AC power %dW, energy %d%%\n", grid_power, ac_power, soc);
 #endif
             new_meter = false;
             if (delay) {
@@ -162,22 +154,45 @@ int main(int argc, char *argv[]) {
             modbus_close(ctx);
             continue;
         }
+        if (modbus_read_registers(ctx, 37005, 1, &soc) != 1) {
+            modbus_connected = false;
+            modbus_close(ctx);
+            continue;
+        }
         storage_power = (int)ac_power;
 
-        if ((storage_power + grid_power) < -100) {
-            storage_power += grid_power + 50; // auf 50W Einspeisung ins Netz regeln
-            if (storage_power < -2000) {
-                storage_power = -2000;
+        if ((storage_power + grid_power) < -120) {
+            storage_power += grid_power + 0; // auf 0W Einspeisung regeln
+            if (soc == 100) {
+               limit = 0;
+            } else if (soc >= 95) {
+               limit = -250;
+            } else if (soc >= 90) {
+               limit = -500;
+            } else {
+               limit = -2500;
             }
+//limit = -2000;
+            if (storage_power < limit) {
+                storage_power = limit;
+            }
+
             force_mode = 1; // charge
             force_charge_power = abs(storage_power);
             force_discharge_power = 0;
             printf("grid %dW storage %dW charge %dW\n", grid_power, ac_power, abs(storage_power));
-        } else if (!charge_only && ((storage_power + grid_power) > 100)) {
-            storage_power += grid_power - 50; // auf 50W Netzbezug regeln
-            if (storage_power > 800) {
-                storage_power = 800;
+        } else if (!charge_only && ((storage_power + grid_power) > 120)) {
+            storage_power += grid_power - 0; // auf 0W Netzbezug regeln
+            if (soc <= 12) {
+               limit = 0;
+            } else {
+               limit = 800;
             }
+//limit=800;
+            if (storage_power > limit) {
+                storage_power = limit;
+            }
+         
             force_mode = 2; // discharge
             force_charge_power = 0;
             force_discharge_power = storage_power;
