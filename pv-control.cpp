@@ -60,6 +60,7 @@ int main(int argc, char *argv[]) {
     bool modbus_connected = false;
     int16_t ac_power;
     uint16_t soc;
+    char mqtt_message[100];
 
     if ((argc == 2) && (strcmp(argv[1], "charge") == 0)) {
         charge_only = true;
@@ -73,6 +74,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Kontext-Erstellung fehlgeschlagen\n");
         return -1;
     }
+    modbus_set_response_timeout(ctx, 2, 0);
 
     mosquitto_lib_init();
     mosq = mosquitto_new("storage-client", true, NULL);
@@ -186,13 +188,13 @@ int main(int argc, char *argv[]) {
             if (soc <= 12) {
                limit = 0;
             } else {
-               limit = 800;
+               limit = 2000;
             }
 //limit=800;
             if (storage_power > limit) {
                 storage_power = limit;
             }
-         
+
             force_mode = 2; // discharge
             force_charge_power = 0;
             force_discharge_power = storage_power;
@@ -211,6 +213,14 @@ int main(int argc, char *argv[]) {
             modbus_connected = false;
             modbus_close(ctx);
         }
+
+        // publish mqtt
+        ret = snprintf(mqtt_message, sizeof(mqtt_message), "{\"ac-power\":%d,\"grid-power\":%d,\"soc\":%d}",
+                       ac_power, grid_power, soc);
+        if ((ret > 0) && (ret < (int)sizeof(mqtt_message))) {
+            mosquitto_publish(mosq, 0, "home/storage/actual", len, mqtt_message, 1, false);
+        }
+
         fflush(stdout);
     }
 
