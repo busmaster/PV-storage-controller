@@ -60,6 +60,8 @@ int main(int argc, char *argv[]) {
     bool modbus_connected = false;
     int16_t ac_power;
     uint16_t soc;
+    uint16_t total_energy;
+    float soc_f;
     char mqtt_message[100];
 
     if ((argc == 2) && (strcmp(argv[1], "charge") == 0)) {
@@ -104,8 +106,11 @@ int main(int argc, char *argv[]) {
             printf("modbus reconnect\n");
             sleep(10);
             if (modbus_connect(ctx) == 0) {
-                if ((modbus_write_register(ctx, 42000, 0x55aa) == 1) && // enable RS485 control mode
-                    (modbus_write_register(ctx, 42010, 0) == 1)) { // set force mode 'None'
+                if ((modbus_write_register(ctx, 42000, 0x55aa) == 1)           && // enable RS485 control mode
+                    (modbus_write_register(ctx, 42010, 0) == 1)                && // set force mode 'None'
+                    (modbus_read_registers(ctx, 32105, 1, &total_energy) == 1) && // total energy capacity
+                    (modbus_write_register(ctx, 44002, 2500) == 1)             && // set max charge power
+                    (modbus_write_register(ctx, 44003, 2500) == 1)) {             // set max discharge power
                     modbus_connected = true;
                     char ch;
                     while (recv(mosq_fd, &ch, sizeof(ch), MSG_DONTWAIT) > 0);
@@ -131,9 +136,9 @@ int main(int argc, char *argv[]) {
 
         if (new_meter) {
 #if 0
-            modbus_read_registers(ctx, 37005, 1, &soc);
+            modbus_read_registers(ctx, 34002, 1, &soc);
             modbus_read_registers(ctx, 30006, 1, (uint16_t *)&ac_power);
-            printf("        grid %dW, AC power %dW, energy %d%%\n", grid_power, ac_power, soc);
+            printf("        grid %dW, AC power %dW, energy %f.1%%\n", grid_power, ac_power, (float)soc / 10.0);
 #endif
             new_meter = false;
             if (delay) {
@@ -156,7 +161,7 @@ int main(int argc, char *argv[]) {
             modbus_close(ctx);
             continue;
         }
-        if (modbus_read_registers(ctx, 37005, 1, &soc) != 1) {
+        if (modbus_read_registers(ctx, 34002, 1, &soc) != 1) {
             modbus_connected = false;
             modbus_close(ctx);
             continue;
@@ -165,11 +170,11 @@ int main(int argc, char *argv[]) {
 
         if ((storage_power + grid_power) < -120) {
             storage_power += grid_power + 0; // auf 0W Einspeisung regeln
-            if (soc == 100) {
+            if (soc == 1000) {
                limit = 0;
-            } else if (soc >= 95) {
+            } else if (soc >= 950) {
                limit = -250;
-            } else if (soc >= 90) {
+            } else if (soc >= 900) {
                limit = -500;
             } else {
                limit = -2500;
@@ -185,7 +190,7 @@ int main(int argc, char *argv[]) {
             printf("grid %dW storage %dW charge %dW\n", grid_power, ac_power, abs(storage_power));
         } else if (!charge_only && ((storage_power + grid_power) > 120)) {
             storage_power += grid_power - 0; // auf 0W Netzbezug regeln
-            if (soc <= 12) {
+            if (soc <= 120) {
                limit = 0;
             } else {
                limit = 2000;
@@ -215,10 +220,11 @@ int main(int argc, char *argv[]) {
         }
 
         // publish mqtt
-        ret = snprintf(mqtt_message, sizeof(mqtt_message), "{\"ac-power\":%d,\"grid-power\":%d,\"soc\":%d}",
-                       ac_power, grid_power, soc);
+        soc_f = (float)soc / 10.0;
+        ret = snprintf(mqtt_message, sizeof(mqtt_message), "{\"ac-power\":%d,\"grid-power\":%d,\"soc\":%.1f,\"energy\":%d}",
+                       ac_power, grid_power, soc_f, (uint16_t)((float)total_energy * soc_f / 100.0));
         if ((ret > 0) && (ret < (int)sizeof(mqtt_message))) {
-            mosquitto_publish(mosq, 0, "home/storage/actual", len, mqtt_message, 1, false);
+            mosquitto_publish(mosq, 0, "home/storage/actual", ret, mqtt_message, 1, false);
         }
 
         fflush(stdout);
